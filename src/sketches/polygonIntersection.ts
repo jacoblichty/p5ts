@@ -235,6 +235,102 @@ const polygonKey = (polygon: Polygon): string => {
     .join(";");
 };
 
+const pointKey = ([x, y]: Vertex): string =>
+  `${Math.round(x * 1e6) / 1e6},${Math.round(y * 1e6) / 1e6}`;
+
+const undirectedEdgeKey = (a: Vertex, b: Vertex): string => {
+  const keyA = pointKey(a);
+  const keyB = pointKey(b);
+  return keyA < keyB ? `${keyA}|${keyB}` : `${keyB}|${keyA}`;
+};
+
+const mergeIntersectionFragments = (fragments: Polygon[]): Polygon[] => {
+  type Edge = { start: Vertex; end: Vertex; used: boolean };
+
+  const edgeCounts = new Map<string, number>();
+  const representativeEdges = new Map<string, { start: Vertex; end: Vertex }>();
+
+  for (const fragment of fragments) {
+    const ring = ensureCCW(normalizeInputPolygon(fragment));
+    if (!hasArea(ring)) {
+      continue;
+    }
+
+    for (let i = 0; i < ring.length; i += 1) {
+      const start = ring[i];
+      const end = ring[(i + 1) % ring.length];
+      if (samePoint(start, end)) {
+        continue;
+      }
+
+      const key = undirectedEdgeKey(start, end);
+      edgeCounts.set(key, (edgeCounts.get(key) ?? 0) + 1);
+      if (!representativeEdges.has(key)) {
+        representativeEdges.set(key, { start, end });
+      }
+    }
+  }
+
+  const outgoing = new Map<string, Edge[]>();
+
+  for (const [key, count] of edgeCounts) {
+    if (count !== 1) {
+      continue;
+    }
+
+    const edge = representativeEdges.get(key);
+    if (!edge) {
+      continue;
+    }
+
+    const startKey = pointKey(edge.start);
+    const startEdges = outgoing.get(startKey) ?? [];
+    startEdges.push({ start: edge.start, end: edge.end, used: false });
+    outgoing.set(startKey, startEdges);
+  }
+
+  const merged: Polygon[] = [];
+
+  for (const edges of outgoing.values()) {
+    for (const edge of edges) {
+      if (edge.used) {
+        continue;
+      }
+
+      const loop: Polygon = [];
+      let currentEdge: Edge | undefined = edge;
+
+      while (currentEdge && !currentEdge.used) {
+        currentEdge.used = true;
+        loop.push(currentEdge.start);
+
+        const nextEdges: Edge[] = outgoing.get(pointKey(currentEdge.end)) ?? [];
+        currentEdge = nextEdges.find((candidate) => !candidate.used);
+      }
+
+      const normalizedLoop = ensureCCW(normalizeInputPolygon(loop));
+      if (hasArea(normalizedLoop)) {
+        merged.push(normalizedLoop);
+      }
+    }
+  }
+
+  const deduped: Polygon[] = [];
+  const seen = new Set<string>();
+
+  for (const polygon of merged) {
+    const key = polygonKey(polygon);
+    if (!key || seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(polygon);
+  }
+
+  return deduped;
+};
+
 /**
  * Intersects two simple polygons (convex or concave) and returns resulting rings.
  * Local implementation:
@@ -247,7 +343,7 @@ export const intersectPolygons = (
 ): Polygon[] => {
   const trianglesA = triangulatePolygon(polygonA);
   const trianglesB = triangulatePolygon(polygonB);
-  const output: Polygon[] = [];
+  const fragments: Polygon[] = [];
   const seen = new Set<string>();
 
   for (const triA of trianglesA) {
@@ -263,9 +359,9 @@ export const intersectPolygons = (
       }
 
       seen.add(key);
-      output.push(clipped);
+      fragments.push(clipped);
     }
   }
 
-  return output;
+  return mergeIntersectionFragments(fragments);
 };
