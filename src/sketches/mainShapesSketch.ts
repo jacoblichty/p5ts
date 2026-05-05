@@ -1,4 +1,5 @@
 import polygonClipping from "polygon-clipping";
+import { intersectPolygons } from "./polygonIntersection";
 
 interface SketchShape {
   x: number;
@@ -9,10 +10,18 @@ interface SketchShape {
 
 const shapes: SketchShape[] = [];
 
+export type IntersectionEngine = "polygonClipping" | "localPolygonIntersection";
+
 let activeShapeIndex = -1;
 let offsetX = 0;
 let offsetY = 0;
 let overlaps: Array<Array<[number, number]>> = [];
+let intersectionEngine: IntersectionEngine = "polygonClipping";
+
+export const setIntersectionEngine = (engine: IntersectionEngine) => {
+  intersectionEngine = engine;
+  computeOverlaps();
+};
 
 const getCanvasSize = (p5: any) => {
   const width = Math.max(
@@ -207,16 +216,22 @@ const computeOverlaps = () => {
       const poly1 = shapes[i].vertices;
       const poly2 = shapes[j].vertices;
 
-      // polygon-clipping expects [ [ [x, y], ... ] ] for each polygon.
-      const intersection = polygonClipping.intersection([poly1], [poly2]);
+      if (intersectionEngine === "polygonClipping") {
+        // polygon-clipping expects [ [ [x, y], ... ] ] for each polygon.
+        const intersection = polygonClipping.intersection([poly1], [poly2]);
 
-      for (const polygon of intersection) {
-        for (const ring of polygon) {
-          if (ring.length >= 3) {
-            overlaps.push(ring as Array<[number, number]>);
+        for (const polygon of intersection) {
+          for (const ring of polygon) {
+            if (ring.length >= 3) {
+              overlaps.push(ring as Array<[number, number]>);
+            }
           }
         }
+        continue;
       }
+
+      const intersection = intersectPolygons(poly1, poly2);
+      overlaps.push(...intersection);
     }
   }
 };
